@@ -11,7 +11,32 @@
 // Adapted from rustc's path_relative_from
 // https://github.com/rust-lang/rust/blob/e1d0de82cc40b666b88d4a6d2c9dcbc81d7ed27f/src/librustc_back/rpath.rs#L116-L158
 
-use std::path::*;
+use std::{error, fmt, path::*};
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Error {
+    NotAbsolute,
+    ContainsRelative,
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::NotAbsolute => "paths are not absolute",
+                Self::ContainsRelative => "base path contains reference",
+            }
+        )
+    }
+}
+
+impl error::Error for Error {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        None
+    }
+}
 
 /// Construct a relative path from a provided base directory path to the provided path.
 ///
@@ -22,16 +47,16 @@ use std::path::*;
 /// let baz = "/foo/bar/baz";
 /// let bar = "/foo/bar";
 /// let quux = "/foo/bar/quux";
-/// assert_eq!(diff_paths(bar, baz), Some("../".into()));
-/// assert_eq!(diff_paths(baz, bar), Some("baz".into()));
-/// assert_eq!(diff_paths(quux, baz), Some("../quux".into()));
-/// assert_eq!(diff_paths(baz, quux), Some("../baz".into()));
-/// assert_eq!(diff_paths(bar, quux), Some("../".into()));
+/// assert_eq!(diff_paths(bar, baz), Ok("../".into()));
+/// assert_eq!(diff_paths(baz, bar), Ok("baz".into()));
+/// assert_eq!(diff_paths(quux, baz), Ok("../quux".into()));
+/// assert_eq!(diff_paths(baz, quux), Ok("../baz".into()));
+/// assert_eq!(diff_paths(bar, quux), Ok("../".into()));
 ///
-/// assert_eq!(diff_paths(&baz, &bar.to_string()), Some("baz".into()));
-/// assert_eq!(diff_paths(Path::new(baz), Path::new(bar).to_path_buf()), Some("baz".into()));
+/// assert_eq!(diff_paths(&baz, &bar.to_string()), Ok("baz".into()));
+/// assert_eq!(diff_paths(Path::new(baz), Path::new(bar).to_path_buf()), Ok("baz".into()));
 /// ```
-pub fn diff_paths<P, B>(path: P, base: B) -> Option<PathBuf>
+pub fn diff_paths<P, B>(path: P, base: B) -> Result<PathBuf, Error>
 where
     P: AsRef<Path>,
     B: AsRef<Path>,
@@ -39,12 +64,8 @@ where
     let path = path.as_ref();
     let base = base.as_ref();
 
-    if path.is_absolute() != base.is_absolute() {
-        if path.is_absolute() {
-            Some(PathBuf::from(path))
-        } else {
-            None
-        }
+    if !path.is_absolute() || !base.is_absolute() {
+        return Err(Error::NotAbsolute);
     } else {
         let mut ita = path.components();
         let mut itb = base.components();
@@ -60,7 +81,9 @@ where
                 (None, _) => comps.push(Component::ParentDir),
                 (Some(a), Some(b)) if comps.is_empty() && a == b => (),
                 (Some(a), Some(b)) if b == Component::CurDir => comps.push(a),
-                (Some(_), Some(b)) if b == Component::ParentDir => return None,
+                (Some(_), Some(b)) if b == Component::ParentDir => {
+                    return Err(Error::ContainsRelative)
+                }
                 (Some(a), Some(_)) => {
                     comps.push(Component::ParentDir);
                     for _ in itb {
@@ -72,6 +95,6 @@ where
                 }
             }
         }
-        Some(comps.iter().map(|c| c.as_os_str()).collect())
+        Ok(comps.iter().map(|c| c.as_os_str()).collect())
     }
 }
